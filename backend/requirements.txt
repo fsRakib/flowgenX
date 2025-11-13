@@ -1,0 +1,22 @@
+# FastAPI Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+pydantic[email]==2.5.3
+
+# HTTP Client
+requests==2.31.0
+
+# Redis for idempotency and rate limiting
+redis==5.0.1
+
+# Security and validation
+python-multipart==0.0.6
+
+# Standard library enhancements (typically included, but explicit versions for production)
+typing-extensions==4.9.0
+
+# Optional: Development and testing tools
+# pytest==7.4.3
+# pytest-asyncio==0.21.1
+# httpx==0.26.0

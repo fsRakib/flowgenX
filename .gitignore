@@ -1,0 +1,209 @@
+# ============================================================================
+# FlowGenX - Monorepo .gitignore
+# ============================================================================
+
+# ============================================================================
+# Python / Backend
+# ============================================================================
+
+# Virtual environments
+backend/.venv/
+backend/venv/
+backend/env/
+backend/ENV/
+backend/.python-version
+
+# Python cache
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.py[cod]
+backend/*$py.class
+backend/**/*.py[cod]
+backend/**/*$py.class
+
+# Distribution / packaging
+backend/.Python
+backend/build/
+backend/develop-eggs/
+backend/dist/
+backend/downloads/
+backend/eggs/
+backend/.eggs/
+backend/lib/
+backend/lib64/
+backend/parts/
+backend/sdist/
+backend/var/
+backend/wheels/
+backend/pip-wheel-metadata/
+backend/share/python-wheels/
+backend/*.egg-info/
+backend/.installed.cfg
+backend/*.egg
+
+# PyInstaller
+backend/*.manifest
+backend/*.spec
+
+# Unit test / coverage
+backend/.pytest_cache/
+backend/.coverage
+backend/.coverage.*
+backend/htmlcov/
+backend/.tox/
+backend/.nox/
+backend/coverage.xml
+backend/*.cover
+backend/.hypothesis/
+
+# Flask/Django
+backend/instance/
+backend/.webassets-cache
+backend/db.sqlite3
+backend/db.sqlite3-journal
+
+# Environment variables
+backend/.env
+backend/.env.local
+backend/.env.*.local
+
+# IDEs
+backend/.vscode/
+backend/.idea/
+backend/*.swp
+backend/*.swo
+backend/*~
+
+# Logs
+backend/*.log
+backend/logs/
+
+# ============================================================================
+# Node.js / Frontend
+# ============================================================================
+
+# Dependencies
+frontend/node_modules/
+frontend/.pnp
+frontend/.pnp.js
+
+# Testing
+frontend/coverage/
+
+# Next.js
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Production
+frontend/dist/
+
+# Misc
+frontend/.DS_Store
+frontend/*.pem
+
+# Debug
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# Vercel
+frontend/.vercel
+
+# TypeScript
+frontend/*.tsbuildinfo
+frontend/next-env.d.ts
+
+# Environment variables
+frontend/.env
+frontend/.env*.local
+frontend/.env.production
+frontend/.env.development
+
+# IDEs
+frontend/.vscode/
+frontend/.idea/
+
+# ============================================================================
+# OS Files
+# ============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ============================================================================
+# IDEs & Editors (Root level)
+# ============================================================================
+
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.code-workspace
+
+# ============================================================================
+# Docker
+# ============================================================================
+
+docker-compose.override.yml
+*.env.docker
+
+# ============================================================================
+# Temporary & Cache
+# ============================================================================
+
+*.tmp
+*.temp
+*.cache
+.cache/
+
+# ============================================================================
+# Secrets & Credentials
+# ============================================================================
+
+*.pem
+*.key
+*.cert
+*.crt
+secrets/
+credentials/
+.credentials/
+
+# ============================================================================
+# Database
+# ============================================================================
+
+*.sqlite
+*.sqlite3
+*.db
+
+# ============================================================================
+# Logs
+# ============================================================================
+
+*.log
+logs/
+log/
