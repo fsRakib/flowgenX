@@ -1,0 +1,446 @@
+"use client";
+
+import { useState } from "react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Loader2, CheckCircle2, XCircle, Send, Code, Eye } from "lucide-react";
+
+// Try port 5000 first, fallback to 5001
+const API_PORTS = [5000, 5001];
+let API_BASE_URL = `http://localhost:${API_PORTS[0]}`;
+
+// Function to test API availability and set the correct port
+async function findAvailableApi(): Promise<string> {
+  for (const port of API_PORTS) {
+    try {
+      const url = `http://localhost:${port}/health`;
+      const response = await fetch(url, {
+        method: "GET",
+        signal: AbortSignal.timeout(1000), // 1 second timeout
+      });
+      if (response.ok) {
+        return `http://localhost:${port}`;
+      }
+    } catch (error) {
+      continue;
+    }
+  }
+  return `http://localhost:${API_PORTS[0]}`; // Default to 5000
+}
+
+interface ApiResponse {
+  status: "success" | "error";
+  data?: any;
+  error?: string;
+}
+
+export default function ApiTester() {
+  const [activeTab, setActiveTab] = useState("test-connection");
+  const [loading, setLoading] = useState(false);
+  const [response, setResponse] = useState<ApiResponse | null>(null);
+
+  // Test Connection State
+  const [subdomain, setSubdomain] = useState("");
+  const [email, setEmail] = useState("");
+  const [apiKey, setApiKey] = useState("");
+
+  // Event Categories State
+  const [selectedCategory, setSelectedCategory] = useState("");
+  const [categories, setCategories] = useState<any[]>([]);
+
+  const resetResponse = () => {
+    setResponse(null);
+  };
+
+  const handleTestConnection = async () => {
+    if (!subdomain || !email || !apiKey) {
+      setResponse({
+        status: "error",
+        error: "Please fill in all fields",
+      });
+      return;
+    }
+
+    setLoading(true);
+    resetResponse();
+
+    try {
+      // Find available API port
+      API_BASE_URL = await findAvailableApi();
+
+      const res = await fetch(`${API_BASE_URL}/zendesk/test-connection`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          subdomain,
+          email,
+          api_key: apiKey,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        setResponse({
+          status: "success",
+          data,
+        });
+      } else {
+        setResponse({
+          status: "error",
+          error: data.detail || "Connection failed",
+        });
+      }
+    } catch (error: any) {
+      setResponse({
+        status: "error",
+        error: error.message || "Failed to connect to API",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGetCategories = async () => {
+    setLoading(true);
+    resetResponse();
+
+    try {
+      // Find available API port
+      API_BASE_URL = await findAvailableApi();
+
+      const res = await fetch(`${API_BASE_URL}/zendesk/event-categories`);
+      const data = await res.json();
+
+      if (res.ok) {
+        setCategories(data.categories || []);
+        setResponse({
+          status: "success",
+          data,
+        });
+      } else {
+        setResponse({
+          status: "error",
+          error: data.detail || "Failed to fetch categories",
+        });
+      }
+    } catch (error: any) {
+      setResponse({
+        status: "error",
+        error: error.message || "Failed to connect to API",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGetEventsByCategory = async () => {
+    if (!selectedCategory) {
+      setResponse({
+        status: "error",
+        error: "Please select a category",
+      });
+      return;
+    }
+
+    setLoading(true);
+    resetResponse();
+
+    try {
+      // Find available API port
+      API_BASE_URL = await findAvailableApi();
+
+      const res = await fetch(
+        `${API_BASE_URL}/zendesk/events/${selectedCategory}`
+      );
+      const data = await res.json();
+
+      if (res.ok) {
+        setResponse({
+          status: "success",
+          data,
+        });
+      } else {
+        setResponse({
+          status: "error",
+          error: data.detail || "Failed to fetch events",
+        });
+      }
+    } catch (error: any) {
+      setResponse({
+        status: "error",
+        error: error.message || "Failed to connect to API",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* Left Panel - API Request */}
+      <div>
+        <Card className="border-slate-200 dark:border-slate-800">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Send className="w-5 h-5 text-blue-600" />
+              API Request
+            </CardTitle>
+            <CardDescription>Configure and send API requests</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Tabs
+              value={activeTab}
+              onValueChange={setActiveTab}
+              className="w-full"
+            >
+              <TabsList className="grid w-full grid-cols-3">
+                <TabsTrigger value="test-connection">
+                  Test Connection
+                </TabsTrigger>
+                <TabsTrigger value="categories">Categories</TabsTrigger>
+                <TabsTrigger value="events">Events</TabsTrigger>
+              </TabsList>
+
+              {/* Test Connection Tab */}
+              <TabsContent value="test-connection" className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <Label htmlFor="subdomain">Subdomain</Label>
+                  <Input
+                    id="subdomain"
+                    placeholder="your-company"
+                    value={subdomain}
+                    onChange={(e) => setSubdomain(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="admin@company.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="apiKey">API Key</Label>
+                  <Input
+                    id="apiKey"
+                    type="password"
+                    placeholder="Enter your Zendesk API key"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                  />
+                </div>
+
+                <div className="pt-2">
+                  <Button
+                    onClick={handleTestConnection}
+                    disabled={loading}
+                    className="w-full"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Testing Connection...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4 mr-2" />
+                        Test Connection
+                      </>
+                    )}
+                  </Button>
+                </div>
+
+                <div className="mt-4 p-3 bg-slate-100 dark:bg-slate-900 rounded-md">
+                  <p className="text-xs font-mono text-slate-600 dark:text-slate-400">
+                    POST /zendesk/test-connection
+                  </p>
+                </div>
+              </TabsContent>
+
+              {/* Event Categories Tab */}
+              <TabsContent value="categories" className="space-y-4 mt-4">
+                <Alert>
+                  <Eye className="h-4 w-4" />
+                  <AlertDescription>
+                    Get all Zendesk event categories with event counts
+                  </AlertDescription>
+                </Alert>
+
+                <Button
+                  onClick={handleGetCategories}
+                  disabled={loading}
+                  className="w-full"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Fetching Categories...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4 mr-2" />
+                      Get Event Categories
+                    </>
+                  )}
+                </Button>
+
+                <div className="mt-4 p-3 bg-slate-100 dark:bg-slate-900 rounded-md">
+                  <p className="text-xs font-mono text-slate-600 dark:text-slate-400">
+                    GET /zendesk/event-categories
+                  </p>
+                </div>
+              </TabsContent>
+
+              {/* Events by Category Tab */}
+              <TabsContent value="events" className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <Label htmlFor="category">Select Category</Label>
+                  <Select
+                    value={selectedCategory}
+                    onValueChange={setSelectedCategory}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Choose a category" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ticket">Ticket Events</SelectItem>
+                      <SelectItem value="user">User Events</SelectItem>
+                      <SelectItem value="organization">
+                        Organization Events
+                      </SelectItem>
+                      <SelectItem value="article">Article Events</SelectItem>
+                      <SelectItem value="community">
+                        Community Events
+                      </SelectItem>
+                      <SelectItem value="agent_availability">
+                        Agent Availability
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <Button
+                  onClick={handleGetEventsByCategory}
+                  disabled={loading || !selectedCategory}
+                  className="w-full"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Fetching Events...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4 mr-2" />
+                      Get Events
+                    </>
+                  )}
+                </Button>
+
+                <div className="mt-4 p-3 bg-slate-100 dark:bg-slate-900 rounded-md">
+                  <p className="text-xs font-mono text-slate-600 dark:text-slate-400">
+                    GET /zendesk/events/{selectedCategory || "{category}"}
+                  </p>
+                </div>
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Right Panel - API Response */}
+      <div>
+        <Card className="border-slate-200 dark:border-slate-800 h-full">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Code className="w-5 h-5 text-purple-600" />
+              Response
+            </CardTitle>
+            <CardDescription>API response will appear here</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {response ? (
+              <div className="space-y-4">
+                {/* Status Badge */}
+                <div className="flex items-center gap-2">
+                  {response.status === "success" ? (
+                    <>
+                      <CheckCircle2 className="w-5 h-5 text-green-600" />
+                      <Badge variant="default" className="bg-green-600">
+                        Success
+                      </Badge>
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="w-5 h-5 text-red-600" />
+                      <Badge variant="destructive">Error</Badge>
+                    </>
+                  )}
+                </div>
+
+                {/* Response Body */}
+                {response.status === "success" && response.data && (
+                  <div className="rounded-lg bg-slate-950 p-4 overflow-auto max-h-[600px]">
+                    <pre className="text-xs text-green-400 font-mono">
+                      {JSON.stringify(response.data, null, 2)}
+                    </pre>
+                  </div>
+                )}
+
+                {response.status === "error" && (
+                  <Alert variant="destructive">
+                    <XCircle className="h-4 w-4" />
+                    <AlertDescription>{response.error}</AlertDescription>
+                  </Alert>
+                )}
+
+                {/* Clear Button */}
+                <Button
+                  variant="outline"
+                  onClick={resetResponse}
+                  className="w-full"
+                >
+                  Clear Response
+                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-64 text-slate-400">
+                <Code className="w-16 h-16 mb-4 opacity-20" />
+                <p className="text-sm">No response yet</p>
+                <p className="text-xs mt-1">
+                  Send a request to see the response
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
