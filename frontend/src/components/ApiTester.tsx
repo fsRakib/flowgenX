@@ -66,6 +66,16 @@ export default function ApiTester() {
   const [selectedCategory, setSelectedCategory] = useState("");
   const [categories, setCategories] = useState<any[]>([]);
 
+  // Create Webhook State
+  const [webhookName, setWebhookName] = useState("");
+  const [webhookEndpoint, setWebhookEndpoint] = useState("");
+  const [webhookSubdomain, setWebhookSubdomain] = useState("");
+  const [webhookEmail, setWebhookEmail] = useState("");
+  const [webhookApiKey, setWebhookApiKey] = useState("");
+  const [selectedEvents, setSelectedEvents] = useState<string[]>([]);
+  const [authType, setAuthType] = useState<string>("none");
+  const [authData, setAuthData] = useState<any>({});
+
   const resetResponse = () => {
     setResponse(null);
   };
@@ -196,6 +206,103 @@ export default function ApiTester() {
     }
   };
 
+  const handleCreateWebhook = async () => {
+    if (!webhookName || !webhookEndpoint || !webhookSubdomain || !webhookEmail || !webhookApiKey) {
+      setResponse({
+        status: "error",
+        error: "Please fill in all required fields",
+      });
+      return;
+    }
+
+    if (selectedEvents.length === 0) {
+      setResponse({
+        status: "error",
+        error: "Please select at least one event subscription",
+      });
+      return;
+    }
+
+    setLoading(true);
+    resetResponse();
+
+    try {
+      API_BASE_URL = await findAvailableApi();
+
+      const payload: any = {
+        subdomain: webhookSubdomain,
+        email: webhookEmail,
+        api_key: webhookApiKey,
+        name: webhookName,
+        endpoint: webhookEndpoint,
+        subscriptions: selectedEvents,
+      };
+
+      // Add authentication if selected
+      if (authType !== "none") {
+        if (authType === "api_key") {
+          payload.authentication = {
+            type: "api_key",
+            data: {
+              name: authData.name || "",
+              value: authData.value || "",
+            },
+          };
+        } else if (authType === "basic_auth") {
+          payload.authentication = {
+            type: "basic_auth",
+            data: {
+              username: authData.username || "",
+              password: authData.password || "",
+            },
+          };
+        } else if (authType === "bearer_token") {
+          payload.authentication = {
+            type: "bearer_token",
+            data: {
+              token: authData.token || "",
+            },
+          };
+        }
+      }
+
+      const res = await fetch(`${API_BASE_URL}/zendesk/webhooks`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        setResponse({
+          status: "success",
+          data,
+        });
+      } else {
+        setResponse({
+          status: "error",
+          error: data.detail || "Failed to create webhook",
+        });
+      }
+    } catch (error: any) {
+      setResponse({
+        status: "error",
+        error: error.message || "Failed to connect to API",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleEventSelection = (event: string) => {
+    setSelectedEvents((prev) =>
+      prev.includes(event) ? prev.filter((e) => e !== event) : [...prev, event]
+    );
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* Left Panel - API Request */}
@@ -214,12 +321,15 @@ export default function ApiTester() {
               onValueChange={setActiveTab}
               className="w-full"
             >
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="test-connection">
                   Test Connection
                 </TabsTrigger>
                 <TabsTrigger value="categories">Categories</TabsTrigger>
                 <TabsTrigger value="events">Events</TabsTrigger>
+                <TabsTrigger value="create-webhook">
+                  Create Webhook
+                </TabsTrigger>
               </TabsList>
 
               {/* Test Connection Tab */}
@@ -366,6 +476,212 @@ export default function ApiTester() {
                 <div className="mt-4 p-3 bg-slate-100 dark:bg-slate-900 rounded-md">
                   <p className="text-xs font-mono text-slate-600 dark:text-slate-400">
                     GET /zendesk/events/{selectedCategory || "{category}"}
+                  </p>
+                </div>
+              </TabsContent>
+
+              {/* Create Webhook Tab */}
+              <TabsContent value="create-webhook" className="space-y-4 mt-4">
+                <Alert>
+                  <Eye className="h-4 w-4" />
+                  <AlertDescription>
+                    Create a new Zendesk webhook with custom event subscriptions
+                  </AlertDescription>
+                </Alert>
+
+                <div className="space-y-2">
+                  <Label htmlFor="webhook-subdomain">Subdomain *</Label>
+                  <Input
+                    id="webhook-subdomain"
+                    placeholder="your-company"
+                    value={webhookSubdomain}
+                    onChange={(e) => setWebhookSubdomain(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="webhook-email">Email *</Label>
+                  <Input
+                    id="webhook-email"
+                    type="email"
+                    placeholder="admin@company.com"
+                    value={webhookEmail}
+                    onChange={(e) => setWebhookEmail(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="webhook-api-key">API Key *</Label>
+                  <Input
+                    id="webhook-api-key"
+                    type="password"
+                    placeholder="Your Zendesk API key"
+                    value={webhookApiKey}
+                    onChange={(e) => setWebhookApiKey(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="webhook-name">Webhook Name *</Label>
+                  <Input
+                    id="webhook-name"
+                    placeholder="My Production Webhook"
+                    value={webhookName}
+                    onChange={(e) => setWebhookName(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="webhook-endpoint">Endpoint URL *</Label>
+                  <Input
+                    id="webhook-endpoint"
+                    placeholder="https://your-server.com/webhooks/zendesk"
+                    value={webhookEndpoint}
+                    onChange={(e) => setWebhookEndpoint(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Event Subscriptions *</Label>
+                  <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-2 border rounded-md">
+                    {[
+                      "zen:event-type:ticket.TicketCreated",
+                      "zen:event-type:ticket.TicketUpdated",
+                      "zen:event-type:ticket.TicketDeleted",
+                      "zen:event-type:ticket.CommentCreated",
+                      "zen:event-type:ticket.CommentUpdated",
+                      "zen:event-type:user.UserCreated",
+                      "zen:event-type:user.UserUpdated",
+                      "zen:event-type:user.UserDeleted",
+                      "zen:event-type:organization.OrganizationCreated",
+                      "zen:event-type:organization.OrganizationUpdated",
+                    ].map((event) => (
+                      <div key={event} className="flex items-center space-x-2">
+                        <input
+                          type="checkbox"
+                          id={event}
+                          checked={selectedEvents.includes(event)}
+                          onChange={() => toggleEventSelection(event)}
+                          className="rounded"
+                        />
+                        <label
+                          htmlFor={event}
+                          className="text-xs cursor-pointer"
+                        >
+                          {event.split(":").pop()}
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                  {selectedEvents.length > 0 && (
+                    <p className="text-xs text-slate-500">
+                      {selectedEvents.length} event(s) selected
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="auth-type">Authentication (Optional)</Label>
+                  <Select value={authType} onValueChange={setAuthType}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="No Authentication" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No Authentication</SelectItem>
+                      <SelectItem value="api_key">API Key</SelectItem>
+                      <SelectItem value="basic_auth">Basic Auth</SelectItem>
+                      <SelectItem value="bearer_token">Bearer Token</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {authType === "api_key" && (
+                  <div className="space-y-2 pl-4 border-l-2">
+                    <div className="space-y-2">
+                      <Label>Header Name</Label>
+                      <Input
+                        placeholder="X-API-Key"
+                        value={authData.name || ""}
+                        onChange={(e) =>
+                          setAuthData({ ...authData, name: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Header Value</Label>
+                      <Input
+                        type="password"
+                        placeholder="your-api-key"
+                        value={authData.value || ""}
+                        onChange={(e) =>
+                          setAuthData({ ...authData, value: e.target.value })
+                        }
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {authType === "basic_auth" && (
+                  <div className="space-y-2 pl-4 border-l-2">
+                    <div className="space-y-2">
+                      <Label>Username</Label>
+                      <Input
+                        placeholder="username"
+                        value={authData.username || ""}
+                        onChange={(e) =>
+                          setAuthData({ ...authData, username: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Password</Label>
+                      <Input
+                        type="password"
+                        placeholder="password"
+                        value={authData.password || ""}
+                        onChange={(e) =>
+                          setAuthData({ ...authData, password: e.target.value })
+                        }
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {authType === "bearer_token" && (
+                  <div className="space-y-2 pl-4 border-l-2">
+                    <Label>Token</Label>
+                    <Input
+                      type="password"
+                      placeholder="your-bearer-token"
+                      value={authData.token || ""}
+                      onChange={(e) =>
+                        setAuthData({ ...authData, token: e.target.value })
+                      }
+                    />
+                  </div>
+                )}
+
+                <Button
+                  onClick={handleCreateWebhook}
+                  disabled={loading}
+                  className="w-full"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Creating Webhook...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4 mr-2" />
+                      Create Webhook
+                    </>
+                  )}
+                </Button>
+
+                <div className="mt-4 p-3 bg-slate-100 dark:bg-slate-900 rounded-md">
+                  <p className="text-xs font-mono text-slate-600 dark:text-slate-400">
+                    POST /zendesk/webhooks
                   </p>
                 </div>
               </TabsContent>
