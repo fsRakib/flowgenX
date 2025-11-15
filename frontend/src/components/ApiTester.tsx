@@ -333,9 +333,7 @@ export default function ApiTester() {
                 </TabsTrigger>
                 <TabsTrigger value="categories">Categories</TabsTrigger>
                 <TabsTrigger value="events">Events</TabsTrigger>
-                <TabsTrigger value="create-webhook">
-                  Create Webhook
-                </TabsTrigger>
+                <TabsTrigger value="create-webhook">Create Webhook</TabsTrigger>
               </TabsList>
 
               {/* Test Connection Tab */}
