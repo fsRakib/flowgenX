@@ -549,16 +549,16 @@ export default function ApiTester() {
                   <Label>Event Subscriptions *</Label>
                   <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-2 border rounded-md">
                     {[
-                      "zen:event-type:ticket.TicketCreated",
-                      "zen:event-type:ticket.TicketUpdated",
-                      "zen:event-type:ticket.TicketDeleted",
-                      "zen:event-type:ticket.CommentCreated",
-                      "zen:event-type:ticket.CommentUpdated",
-                      "zen:event-type:user.UserCreated",
-                      "zen:event-type:user.UserUpdated",
-                      "zen:event-type:user.UserDeleted",
-                      "zen:event-type:organization.OrganizationCreated",
-                      "zen:event-type:organization.OrganizationUpdated",
+                      "zen:event-type:ticket.created",
+                      "zen:event-type:ticket.updated",
+                      "zen:event-type:ticket.solved",
+                      "zen:event-type:ticket.closed",
+                      "zen:event-type:ticket.comment_added",
+                      "zen:event-type:user.created",
+                      "zen:event-type:user.updated",
+                      "zen:event-type:user.deleted",
+                      "zen:event-type:organization.created",
+                      "zen:event-type:organization.updated",
                     ].map((event) => (
                       <div key={event} className="flex items-center space-x-2">
                         <input
@@ -736,7 +736,11 @@ export default function ApiTester() {
                 {response.status === "error" && (
                   <Alert variant="destructive">
                     <XCircle className="h-4 w-4" />
-                    <AlertDescription>{response.error}</AlertDescription>
+                    <AlertDescription>
+                      {typeof response.error === "string"
+                        ? response.error
+                        : JSON.stringify(response.error, null, 2)}
+                    </AlertDescription>
                   </Alert>
                 )}
 
