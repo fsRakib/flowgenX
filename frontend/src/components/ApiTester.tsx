@@ -66,18 +66,117 @@ export default function ApiTester() {
   const [selectedCategory, setSelectedCategory] = useState("");
   const [categories, setCategories] = useState<any[]>([]);
 
-  // Create Webhook State
+  // Create Webhook State - Single selection workflow
   const [webhookName, setWebhookName] = useState("");
   const [webhookEndpoint, setWebhookEndpoint] = useState("");
   const [webhookSubdomain, setWebhookSubdomain] = useState("");
   const [webhookEmail, setWebhookEmail] = useState("");
   const [webhookApiKey, setWebhookApiKey] = useState("");
-  const [selectedEvents, setSelectedEvents] = useState<string[]>([]);
+
+  // Single selection states for webhook creation
+  const [selectedWebhookCategory, setSelectedWebhookCategory] = useState("");
+  const [webhookCategoryEvents, setWebhookCategoryEvents] = useState<any[]>([]);
+  const [selectedWebhookEvent, setSelectedWebhookEvent] = useState("");
+  const [selectedSubscription, setSelectedSubscription] = useState("");
+
+  // Multi-selection states for Events tab (display purposes)
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [categoryEvents, setCategoryEvents] = useState<any>({});
+  const [selectedEventTypes, setSelectedEventTypes] = useState<string[]>([]);
+
   const [authType, setAuthType] = useState<string>("none");
   const [authData, setAuthData] = useState<any>({});
 
   const resetResponse = () => {
     setResponse(null);
+  };
+
+  // Fetch events for selected webhook category
+  const fetchWebhookCategoryEvents = async (category: string) => {
+    try {
+      API_BASE_URL = await findAvailableApi();
+      const res = await fetch(`${API_BASE_URL}/zendesk/events/${category}`);
+      const data = await res.json();
+
+      if (res.ok) {
+        setWebhookCategoryEvents(data.events || []);
+        // Reset event and subscription selection when category changes
+        setSelectedWebhookEvent("");
+        setSelectedSubscription("");
+      }
+    } catch (error) {
+      console.error(`Failed to fetch events for ${category}:`, error);
+    }
+  };
+
+  // Handle category selection
+  const handleCategoryChange = (category: string) => {
+    setSelectedWebhookCategory(category);
+    if (category) {
+      fetchWebhookCategoryEvents(category);
+    } else {
+      setWebhookCategoryEvents([]);
+      setSelectedWebhookEvent("");
+      setSelectedSubscription("");
+    }
+  };
+
+  // Handle event selection
+  const handleEventChange = (eventValue: string) => {
+    setSelectedWebhookEvent(eventValue);
+    // When event changes, set it as the subscription
+    setSelectedSubscription(eventValue);
+  };
+
+  // Fetch events for a specific category (for Events tab)
+  const fetchCategoryEvents = async (category: string) => {
+    if (categoryEvents[category]) {
+      return; // Already fetched
+    }
+
+    try {
+      API_BASE_URL = await findAvailableApi();
+      const res = await fetch(`${API_BASE_URL}/zendesk/events/${category}`);
+      const data = await res.json();
+
+      if (res.ok) {
+        setCategoryEvents((prev: any) => ({
+          ...prev,
+          [category]: data.events || [],
+        }));
+      }
+    } catch (error) {
+      console.error(`Failed to fetch events for ${category}:`, error);
+    }
+  };
+
+  // Toggle category selection (for Events tab)
+  const toggleCategorySelection = (category: string) => {
+    setSelectedCategories((prev: string[]) => {
+      const isSelected = prev.includes(category);
+      if (isSelected) {
+        // Remove category and its events
+        const categoryEventValues =
+          categoryEvents[category]?.map((e: any) => e.value) || [];
+        setSelectedEventTypes((prevEvents: string[]) =>
+          prevEvents.filter((e: string) => !categoryEventValues.includes(e))
+        );
+        return prev.filter((c: string) => c !== category);
+      } else {
+        // Add category and fetch its events
+        fetchCategoryEvents(category);
+        return [...prev, category];
+      }
+    });
+  };
+
+  // Toggle event type selection (for Events tab)
+  const toggleEventTypeSelection = (eventValue: string) => {
+    setSelectedEventTypes((prev: string[]) =>
+      prev.includes(eventValue)
+        ? prev.filter((e: string) => e !== eventValue)
+        : [...prev, eventValue]
+    );
   };
 
   const handleTestConnection = async () => {
@@ -221,10 +320,10 @@ export default function ApiTester() {
       return;
     }
 
-    if (selectedEvents.length === 0) {
+    if (!selectedSubscription) {
       setResponse({
         status: "error",
-        error: "Please select at least one event subscription",
+        error: "Please select a category, then an event to create subscription",
       });
       return;
     }
@@ -241,7 +340,7 @@ export default function ApiTester() {
         api_key: webhookApiKey,
         name: webhookName,
         endpoint: webhookEndpoint,
-        subscriptions: selectedEvents,
+        subscriptions: [selectedSubscription], // Single subscription
       };
 
       // Add authentication if selected
@@ -301,12 +400,6 @@ export default function ApiTester() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const toggleEventSelection = (event: string) => {
-    setSelectedEvents((prev) =>
-      prev.includes(event) ? prev.filter((e) => e !== event) : [...prev, event]
-    );
   };
 
   return (
@@ -489,7 +582,8 @@ export default function ApiTester() {
                 <Alert>
                   <Eye className="h-4 w-4" />
                   <AlertDescription>
-                    Create a new Zendesk webhook with custom event subscriptions
+                    Create a webhook: Select 1 category → 1 event → creates 1
+                    subscription
                   </AlertDescription>
                 </Alert>
 
@@ -546,43 +640,96 @@ export default function ApiTester() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Event Subscriptions *</Label>
-                  <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-2 border rounded-md">
-                    {[
-                      "zen:event-type:ticket.created",
-                      "zen:event-type:ticket.updated",
-                      "zen:event-type:ticket.solved",
-                      "zen:event-type:ticket.closed",
-                      "zen:event-type:ticket.comment_added",
-                      "zen:event-type:user.created",
-                      "zen:event-type:user.updated",
-                      "zen:event-type:user.deleted",
-                      "zen:event-type:organization.created",
-                      "zen:event-type:organization.updated",
-                    ].map((event) => (
-                      <div key={event} className="flex items-center space-x-2">
-                        <input
-                          type="checkbox"
-                          id={event}
-                          checked={selectedEvents.includes(event)}
-                          onChange={() => toggleEventSelection(event)}
-                          className="rounded"
-                        />
-                        <label
-                          htmlFor={event}
-                          className="text-xs cursor-pointer"
-                        >
-                          {event.split(":").pop()}
-                        </label>
-                      </div>
-                    ))}
-                  </div>
-                  {selectedEvents.length > 0 && (
-                    <p className="text-xs text-slate-500">
-                      {selectedEvents.length} event(s) selected
+                  <Label htmlFor="webhook-category">
+                    Step 1: Select Category *
+                  </Label>
+                  <Select
+                    value={selectedWebhookCategory}
+                    onValueChange={handleCategoryChange}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Choose a category" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ticket">
+                        Ticket Events (50+ events)
+                      </SelectItem>
+                      <SelectItem value="user">
+                        User Events (20+ events)
+                      </SelectItem>
+                      <SelectItem value="organization">
+                        Organization Events
+                      </SelectItem>
+                      <SelectItem value="article">Article Events</SelectItem>
+                      <SelectItem value="community">
+                        Community Events
+                      </SelectItem>
+                      <SelectItem value="agent_availability">
+                        Agent Availability
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {selectedWebhookCategory && (
+                    <p className="text-xs text-green-600 mt-1">
+                      ✓ Category selected: {selectedWebhookCategory}
                     </p>
                   )}
                 </div>
+
+                {selectedWebhookCategory &&
+                  webhookCategoryEvents.length > 0 && (
+                    <div className="space-y-2">
+                      <Label htmlFor="webhook-event">
+                        Step 2: Select Event *
+                      </Label>
+                      <Select
+                        value={selectedWebhookEvent}
+                        onValueChange={handleEventChange}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Choose an event from this category" />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-64">
+                          {webhookCategoryEvents.map((event: any) => (
+                            <SelectItem key={event.value} value={event.value}>
+                              <div className="flex flex-col">
+                                <span className="font-medium">
+                                  {event.label}
+                                </span>
+                                <span className="text-xs text-slate-500">
+                                  {event.description}
+                                </span>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {selectedWebhookEvent && (
+                        <p className="text-xs text-green-600 mt-1">
+                          ✓ Event selected:{" "}
+                          {
+                            webhookCategoryEvents.find(
+                              (e) => e.value === selectedWebhookEvent
+                            )?.label
+                          }
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                {selectedSubscription && (
+                  <div className="p-3 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-md">
+                    <p className="text-xs text-blue-800 dark:text-blue-200">
+                      <strong>Subscription:</strong>{" "}
+                      {webhookCategoryEvents.find(
+                        (e) => e.value === selectedSubscription
+                      )?.label || selectedSubscription}
+                    </p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
+                      Category: {selectedWebhookCategory}
+                    </p>
+                  </div>
+                )}
 
                 <div className="space-y-2">
                   <Label htmlFor="auth-type">Authentication (Optional)</Label>

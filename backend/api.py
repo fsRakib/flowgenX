@@ -7,7 +7,7 @@ with comprehensive security, monitoring, and async processing
 from fastapi import FastAPI, HTTPException, Request, Header, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, AnyUrl, EmailStr, Field, field_validator
+from pydantic import BaseModel, AnyUrl, EmailStr, Field, field_validator, model_validator
 from typing import List, Dict, Any, Optional, Literal
 from datetime import datetime, timedelta
 from enum import Enum
@@ -130,7 +130,10 @@ class ZendeskCreateWebhook(BaseModel):
     api_key: str
     name: str
     endpoint: AnyUrl
-    subscriptions: List[str]
+    # Support both category-based and manual subscription methods
+    categories: Optional[List[str]] = None  # List of category keys (e.g., ["ticket", "user"])
+    event_types: Optional[List[str]] = None  # List of specific event types within categories
+    subscriptions: Optional[List[str]] = None  # Manual subscription list (legacy support)
     authentication: Optional[ZendeskAuthentication] = None
     custom_headers: Optional[Dict[str, str]] = None
     
@@ -146,6 +149,17 @@ class ZendeskCreateWebhook(BaseModel):
                 if len(value) > 1000:
                     raise ValueError(f"Header value for '{name}' exceeds 1000 characters")
         return v
+    
+    @model_validator(mode='after')
+    def validate_subscription_method(self):
+        # Ensure at least one method is provided
+        has_categories = self.categories and len(self.categories) > 0
+        has_event_types = self.event_types and len(self.event_types) > 0
+        has_subscriptions = self.subscriptions and len(self.subscriptions) > 0
+        
+        if not (has_categories or has_event_types or has_subscriptions):
+            raise ValueError("Must provide at least one of: 'categories', 'event_types', or 'subscriptions'")
+        return self
 
 class ZendeskEventCategory(BaseModel):
     key: str
@@ -1005,40 +1019,97 @@ async def get_zendesk_events_by_category(category: str):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/zendesk/events")
-async def get_all_zendesk_events():
-    """
-    Get all Zendesk webhook events across all categories
+# @app.get("/zendesk/events")
+# async def get_all_zendesk_events():
+#     """
+#     Get all Zendesk webhook events across all categories
     
-    Returns 90+ comprehensive event types
-    """
-    events = ZendeskEventManager.get_all_events()
+#     Returns 90+ comprehensive event types
+#     """
+#     events = ZendeskEventManager.get_all_events()
     
-    # Group by category for better organization
-    grouped = {}
-    for event in events:
-        if event.category not in grouped:
-            grouped[event.category] = []
-        grouped[event.category].append(event)
+#     # Group by category for better organization
+#     grouped = {}
+#     for event in events:
+#         if event.category not in grouped:
+#             grouped[event.category] = []
+#         grouped[event.category].append(event)
     
-    return {
-        "total_events": len(events),
-        "categories": grouped,
-        "flat_list": events
-    }
+#     return {
+#         "total_events": len(events),
+#         "categories": grouped,
+#         "flat_list": events
+#     }
 
-@app.get("/zendesk/events/search")
-async def search_zendesk_events(q: str):
-    """
-    Search Zendesk events by keyword in label, description, or value
+# @app.get("/zendesk/events/search")
+# async def search_zendesk_events(q: str):
+#     """
+#     Search Zendesk events by keyword in label, description, or value
     
-    Example: ?q=ticket or ?q=created or ?q=comment
+#     Example: ?q=ticket or ?q=created or ?q=comment
+#     """
+#     results = ZendeskEventManager.search_events(q)
+#     return {
+#         "query": q,
+#         "result_count": len(results),
+#         "results": results
+#     }
+
+@app.get("/zendesk/webhook-builder")
+async def zendesk_webhook_builder():
     """
-    results = ZendeskEventManager.search_events(q)
+    Helper endpoint to guide webhook creation with categories
+    
+    Returns all available categories with their events for easy webhook setup
+    """
+    categories = ZendeskEventManager.get_all_categories()
+    
+    examples = {
+        "category_based": {
+            "description": "Subscribe to all events in specific categories",
+            "example": {
+                "name": "My Ticket & User Webhook",
+                "endpoint": "https://your-domain.com/webhook",
+                "categories": ["ticket", "user"],
+                "subdomain": "your-subdomain",
+                "email": "your-email@example.com",
+                "api_key": "your-api-key"
+            }
+        },
+        "event_based": {
+            "description": "Subscribe to specific events across categories",
+            "example": {
+                "name": "Specific Events Webhook",
+                "endpoint": "https://your-domain.com/webhook",
+                "event_types": [
+                    "zen:event-type:ticket.created",
+                    "zen:event-type:ticket.solved",
+                    "zen:event-type:user.created"
+                ],
+                "subdomain": "your-subdomain",
+                "email": "your-email@example.com",
+                "api_key": "your-api-key"
+            }
+        },
+        "mixed": {
+            "description": "Combine categories and specific events",
+            "example": {
+                "name": "Mixed Subscription Webhook",
+                "endpoint": "https://your-domain.com/webhook",
+                "categories": ["ticket"],
+                "event_types": ["zen:event-type:user.created"],
+                "subdomain": "your-subdomain",
+                "email": "your-email@example.com",
+                "api_key": "your-api-key"
+            }
+        }
+    }
+    
     return {
-        "query": q,
-        "result_count": len(results),
-        "results": results
+        "available_categories": categories,
+        "usage_examples": examples,
+        "endpoint": "POST /zendesk/webhooks",
+        "note": "All event types from selected categories will be automatically subscribed"
     }
 
 @app.post("/zendesk/webhooks")
@@ -1046,10 +1117,59 @@ async def create_zendesk_webhook(payload: ZendeskCreateWebhook):
     """
     Create a new Zendesk webhook programmatically
     
-    Supports full authentication configuration and custom headers
+    Supports three methods:
+    1. Category-based: Provide 'categories' to subscribe to all events in those categories
+    2. Event-based: Provide 'event_types' to subscribe to specific events
+    3. Manual: Provide 'subscriptions' list directly (legacy support)
+    
+    Examples:
+    - Categories: {"categories": ["ticket", "user"]}
+    - Events: {"event_types": ["zen:event-type:ticket.created", "zen:event-type:user.created"]}
+    - Manual: {"subscriptions": ["zen:event-type:ticket.created"]}
     """
     headers = get_zendesk_headers(payload.subdomain, payload.email, payload.api_key)
     url = f"https://{payload.subdomain}.zendesk.com/api/v2/webhooks"
+    
+    # Build subscriptions based on input method
+    subscriptions = []
+    
+    # Invalid event types that cannot be used in webhooks
+    INVALID_WEBHOOK_EVENTS = [
+        "conditional_ticket_events",  # Only for triggers/automations
+    ]
+    
+    if payload.categories:
+        # Method 1: Category-based subscription
+        for category in payload.categories:
+            try:
+                category_events = ZendeskEventManager.get_events_by_category(category)
+                # Extract event values from category events, filtering out invalid ones
+                subscriptions.extend([
+                    event.value for event in category_events 
+                    if event.value not in INVALID_WEBHOOK_EVENTS
+                ])
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid category '{category}': {str(e)}. Valid categories: {list(ZendeskEventManager.EVENT_TYPES.keys())}"
+                )
+    
+    if payload.event_types:
+        # Method 2: Specific event types
+        subscriptions.extend(payload.event_types)
+    
+    if payload.subscriptions:
+        # Method 3: Manual subscriptions (legacy)
+        subscriptions.extend(payload.subscriptions)
+    
+    # Remove duplicates while preserving order
+    subscriptions = list(dict.fromkeys(subscriptions))
+    
+    if not subscriptions:
+        raise HTTPException(
+            status_code=400,
+            detail="No valid subscriptions generated. Please check your input."
+        )
     
     webhook_payload = {
         "webhook": {
@@ -1058,7 +1178,7 @@ async def create_zendesk_webhook(payload: ZendeskCreateWebhook):
             "endpoint": str(payload.endpoint),
             "http_method": "POST",
             "request_format": "json",
-            "subscriptions": payload.subscriptions
+            "subscriptions": subscriptions
         }
     }
     
@@ -1107,6 +1227,9 @@ async def create_zendesk_webhook(payload: ZendeskCreateWebhook):
                 "endpoint": webhook.get("endpoint"),
                 "status": webhook.get("status"),
                 "subscriptions": webhook.get("subscriptions", []),
+                "total_subscriptions": len(webhook.get("subscriptions", [])),
+                "categories_used": payload.categories if payload.categories else None,
+                "event_types_used": payload.event_types if payload.event_types else None,
                 "created_at": webhook.get("created_at"),
                 "signing_secret_info": "Retrieve via GET /api/v2/webhooks/{webhook_id}/signing_secret"
             }
@@ -1129,565 +1252,565 @@ async def create_zendesk_webhook(payload: ZendeskCreateWebhook):
 # API Endpoints: HubSpot
 # ============================================================================
 
-@app.post("/hubspot/test-connection")
-async def hubspot_test_connection(payload: HubSpotTestConnection):
-    """
-    Test HubSpot API connection with access token
-    Works with both private app tokens and OAuth tokens
-    """
-    url = "https://api.hubapi.com/crm/v3/objects/contacts"
-    headers = {
-        "Authorization": f"Bearer {payload.access_token}",
-        "Content-Type": "application/json"
-    }
+# @app.post("/hubspot/test-connection")
+# async def hubspot_test_connection(payload: HubSpotTestConnection):
+#     """
+#     Test HubSpot API connection with access token
+#     Works with both private app tokens and OAuth tokens
+#     """
+#     url = "https://api.hubapi.com/crm/v3/objects/contacts"
+#     headers = {
+#         "Authorization": f"Bearer {payload.access_token}",
+#         "Content-Type": "application/json"
+#     }
     
-    try:
-        # Try to fetch first contact to test connection
-        response = requests.get(f"{url}?limit=1", headers=headers, timeout=10)
+#     try:
+#         # Try to fetch first contact to test connection
+#         response = requests.get(f"{url}?limit=1", headers=headers, timeout=10)
         
-        if response.status_code == 200:
-            data = response.json()
-            return {
-                "status": ConnectionStatus.SUCCESS,
-                "message": "HubSpot connection successful!",
-                "api_status": "active",
-                "contact_count": data.get("total", 0)
-            }
-        elif response.status_code == 401:
-            raise HTTPException(
-                status_code=401,
-                detail="Authentication failed. Check your access token."
-            )
-        else:
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"HubSpot API error: {response.text}"
-            )
+#         if response.status_code == 200:
+#             data = response.json()
+#             return {
+#                 "status": ConnectionStatus.SUCCESS,
+#                 "message": "HubSpot connection successful!",
+#                 "api_status": "active",
+#                 "contact_count": data.get("total", 0)
+#             }
+#         elif response.status_code == 401:
+#             raise HTTPException(
+#                 status_code=401,
+#                 detail="Authentication failed. Check your access token."
+#             )
+#         else:
+#             raise HTTPException(
+#                 status_code=response.status_code,
+#                 detail=f"HubSpot API error: {response.text}"
+#             )
             
-    except requests.exceptions.Timeout:
-        raise HTTPException(status_code=504, detail="Connection timeout")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"HubSpot connection test failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Connection failed: {str(e)}")
-@app.post("/hubspot/webhooks", response_model=HubSpotWebhookResponse)
-async def create_hubspot_webhook(payload: HubSpotCreateWebhook):
-    """
-    Create HubSpot webhook subscriptions for Public OAuth Apps.
-    """
+#     except requests.exceptions.Timeout:
+#         raise HTTPException(status_code=504, detail="Connection timeout")
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"HubSpot connection test failed: {e}")
+#         raise HTTPException(status_code=500, detail=f"Connection failed: {str(e)}")
+# @app.post("/hubspot/webhooks", response_model=HubSpotWebhookResponse)
+# async def create_hubspot_webhook(payload: HubSpotCreateWebhook):
+#     """
+#     Create HubSpot webhook subscriptions for Public OAuth Apps.
+#     """
     
-    # Step 1: Set the target URL
-    settings_url = f"https://api.hubapi.com/webhooks/v3/{payload.app_id}/settings?hapikey={payload.developer_api_key}"
+#     # Step 1: Set the target URL
+#     settings_url = f"https://api.hubapi.com/webhooks/v3/{payload.app_id}/settings?hapikey={payload.developer_api_key}"
     
-    try:
-        settings_response = requests.put(
-            settings_url,
-            headers={"Content-Type": "application/json"},
-            json={"targetUrl": payload.endpoint_url},
-            timeout=10
-        )
+#     try:
+#         settings_response = requests.put(
+#             settings_url,
+#             headers={"Content-Type": "application/json"},
+#             json={"targetUrl": payload.endpoint_url},
+#             timeout=10
+#         )
         
-        if settings_response.status_code not in [200, 204]:
-            logger.error(f"Failed to set target URL: {settings_response.text}")
-            raise HTTPException(
-                status_code=settings_response.status_code,
-                detail=f"Failed to set webhook target URL: {settings_response.json().get('message', settings_response.text)}"
-            )
+#         if settings_response.status_code not in [200, 204]:
+#             logger.error(f"Failed to set target URL: {settings_response.text}")
+#             raise HTTPException(
+#                 status_code=settings_response.status_code,
+#                 detail=f"Failed to set webhook target URL: {settings_response.json().get('message', settings_response.text)}"
+#             )
         
-        logger.info(f"✅ Webhook target URL set successfully: {payload.endpoint_url}")
+#         logger.info(f"✅ Webhook target URL set successfully: {payload.endpoint_url}")
         
-        # ✅ GET settings to retrieve clientSecret
-        logger.info("🔍 Fetching app-level settings to get clientSecret...")
-        get_settings_response = requests.get(
-            settings_url,
-            headers={"Content-Type": "application/json"},
-            timeout=10
-        )
+#         # ✅ GET settings to retrieve clientSecret
+#         logger.info("🔍 Fetching app-level settings to get clientSecret...")
+#         get_settings_response = requests.get(
+#             settings_url,
+#             headers={"Content-Type": "application/json"},
+#             timeout=10
+#         )
         
-        app_level_secret = None
-        if get_settings_response.status_code == 200:
-            settings_data = get_settings_response.json()
-            logger.info(f"🔍 Settings Response: {json.dumps(settings_data, indent=2)}")
+#         app_level_secret = None
+#         if get_settings_response.status_code == 200:
+#             settings_data = get_settings_response.json()
+#             logger.info(f"🔍 Settings Response: {json.dumps(settings_data, indent=2)}")
             
-            app_level_secret = settings_data.get("clientSecret")
-            if app_level_secret:
-                logger.info(f"✅ Found app-level clientSecret: {app_level_secret[:10]}...")
-            else:
-                logger.warning(f"⚠️ No clientSecret in settings. Available keys: {list(settings_data.keys())}")
-        else:
-            logger.error(f"❌ Failed to get settings: {get_settings_response.status_code} - {get_settings_response.text}")
+#             app_level_secret = settings_data.get("clientSecret")
+#             if app_level_secret:
+#                 logger.info(f"✅ Found app-level clientSecret: {app_level_secret[:10]}...")
+#             else:
+#                 logger.warning(f"⚠️ No clientSecret in settings. Available keys: {list(settings_data.keys())}")
+#         else:
+#             logger.error(f"❌ Failed to get settings: {get_settings_response.status_code} - {get_settings_response.text}")
         
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in settings endpoint: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to configure webhook: {str(e)}")
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"Error in settings endpoint: {e}")
+#         raise HTTPException(status_code=500, detail=f"Failed to configure webhook: {str(e)}")
     
-    # Step 2: Create subscriptions
-    base_url = f"https://api.hubapi.com/webhooks/v3/{payload.app_id}/subscriptions?hapikey={payload.developer_api_key}"
+#     # Step 2: Create subscriptions
+#     base_url = f"https://api.hubapi.com/webhooks/v3/{payload.app_id}/subscriptions?hapikey={payload.developer_api_key}"
     
-    created_subscriptions = []
-    signing_secrets = {}
-    errors = []
+#     created_subscriptions = []
+#     signing_secrets = {}
+#     errors = []
 
-    for subscription in payload.subscriptions:
-        subscription_payload = {
-            "eventType": subscription.subscription_type,
-            "active": True
-        }
+#     for subscription in payload.subscriptions:
+#         subscription_payload = {
+#             "eventType": subscription.subscription_type,
+#             "active": True
+#         }
         
-        if subscription.property_name:
-            subscription_payload["propertyName"] = subscription.property_name
+#         if subscription.property_name:
+#             subscription_payload["propertyName"] = subscription.property_name
 
-        try:
-            response = requests.post(
-                base_url,
-                headers={"Content-Type": "application/json"},
-                json=subscription_payload,
-                timeout=15
-            )
+#         try:
+#             response = requests.post(
+#                 base_url,
+#                 headers={"Content-Type": "application/json"},
+#                 json=subscription_payload,
+#                 timeout=15
+#             )
 
-            if response.status_code == 201:
-                sub_data = response.json()
+#             if response.status_code == 201:
+#                 sub_data = response.json()
                 
-                # ✅ Debug: Print full subscription response
-                logger.info(f"🔍 Subscription Response: {json.dumps(sub_data, indent=2)}")
+#                 # ✅ Debug: Print full subscription response
+#                 logger.info(f"🔍 Subscription Response: {json.dumps(sub_data, indent=2)}")
                 
-                subscription_id = sub_data.get("id")
-                client_secret = sub_data.get("clientSecret")
+#                 subscription_id = sub_data.get("id")
+#                 client_secret = sub_data.get("clientSecret")
                 
-                created_subscriptions.append({
-                    "id": subscription_id,
-                    "type": subscription.subscription_type,
-                    "property": subscription.property_name,
-                    "status": "created"
-                })
+#                 created_subscriptions.append({
+#                     "id": subscription_id,
+#                     "type": subscription.subscription_type,
+#                     "property": subscription.property_name,
+#                     "status": "created"
+#                 })
                 
-                # Check if clientSecret is in subscription response
-                if client_secret:
-                    signing_secrets[subscription_id] = client_secret
-                    logger.info(f"✅ Got clientSecret from subscription: {client_secret[:10]}...")
-                else:
-                    logger.warning(f"⚠️ No clientSecret in subscription response")
-                    logger.warning(f"⚠️ Available keys in subscription: {list(sub_data.keys())}")
+#                 # Check if clientSecret is in subscription response
+#                 if client_secret:
+#                     signing_secrets[subscription_id] = client_secret
+#                     logger.info(f"✅ Got clientSecret from subscription: {client_secret[:10]}...")
+#                 else:
+#                     logger.warning(f"⚠️ No clientSecret in subscription response")
+#                     logger.warning(f"⚠️ Available keys in subscription: {list(sub_data.keys())}")
                 
-                logger.info(f"✅ Created subscription: {subscription.subscription_type}")
-            else:
-                error_data = response.json()
-                error_msg = error_data.get("message", response.text)
-                errors.append({
-                    "subscription": subscription.subscription_type,
-                    "error": error_msg,
-                    "status_code": response.status_code
-                })
-                logger.error(f"❌ Failed to create subscription {subscription.subscription_type}: {error_msg}")
+#                 logger.info(f"✅ Created subscription: {subscription.subscription_type}")
+#             else:
+#                 error_data = response.json()
+#                 error_msg = error_data.get("message", response.text)
+#                 errors.append({
+#                     "subscription": subscription.subscription_type,
+#                     "error": error_msg,
+#                     "status_code": response.status_code
+#                 })
+#                 logger.error(f"❌ Failed to create subscription {subscription.subscription_type}: {error_msg}")
 
-        except Exception as e:
-            errors.append({
-                "subscription": subscription.subscription_type,
-                "error": str(e)
-            })
-            logger.error(f"Exception creating subscription {subscription.subscription_type}: {e}")
+#         except Exception as e:
+#             errors.append({
+#                 "subscription": subscription.subscription_type,
+#                 "error": str(e)
+#             })
+#             logger.error(f"Exception creating subscription {subscription.subscription_type}: {e}")
 
-    if not created_subscriptions and errors:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "Failed to create any subscriptions",
-                "errors": errors
-            }
-        )
+#     if not created_subscriptions and errors:
+#         raise HTTPException(
+#             status_code=400,
+#             detail={
+#                 "message": "Failed to create any subscriptions",
+#                 "errors": errors
+#             }
+#         )
 
-    # ✅ Use app-level secret if individual subscriptions don't have it
-    if app_level_secret and not signing_secrets:
-        signing_secrets["app_level"] = app_level_secret
-        logger.info("✅ Using app-level clientSecret for all subscriptions")
+#     # ✅ Use app-level secret if individual subscriptions don't have it
+#     if app_level_secret and not signing_secrets:
+#         signing_secrets["app_level"] = app_level_secret
+#         logger.info("✅ Using app-level clientSecret for all subscriptions")
 
-    return HubSpotWebhookResponse(
-        success=len(created_subscriptions) > 0,
-        subscription_ids=[sub["id"] for sub in created_subscriptions],
-        signing_secrets=signing_secrets,
-        webhook_url=payload.endpoint_url,
-        total_subscriptions=len(created_subscriptions),
-        message=f"✅ Created {len(created_subscriptions)} subscriptions" + 
-                (f" (⚠️ {len(errors)} failed)" if errors else "")
-    )
+#     return HubSpotWebhookResponse(
+#         success=len(created_subscriptions) > 0,
+#         subscription_ids=[sub["id"] for sub in created_subscriptions],
+#         signing_secrets=signing_secrets,
+#         webhook_url=payload.endpoint_url,
+#         total_subscriptions=len(created_subscriptions),
+#         message=f"✅ Created {len(created_subscriptions)} subscriptions" + 
+#                 (f" (⚠️ {len(errors)} failed)" if errors else "")
+#     )
 
-@app.get("/hubspot/event-types")
-async def get_hubspot_event_types():
-    """
-    Get all HubSpot object types and their available events
+# @app.get("/hubspot/event-types")
+# async def get_hubspot_event_types():
+#     """
+#     Get all HubSpot object types and their available events
     
-    Note: HubSpot private apps require UI configuration.
-    This endpoint documents available event types.
-    """
-    return {
-        "note": "HubSpot private apps require webhook configuration via UI",
-        "documentation_url": "Settings > Integrations > Private Apps > Webhooks tab",
-        "object_types": HubSpotEventManager.get_all_object_types(),
-        "total_objects": len(HubSpotEventManager.EVENT_TYPES)
-    }
+#     Note: HubSpot private apps require UI configuration.
+#     This endpoint documents available event types.
+#     """
+#     return {
+#         "note": "HubSpot private apps require webhook configuration via UI",
+#         "documentation_url": "Settings > Integrations > Private Apps > Webhooks tab",
+#         "object_types": HubSpotEventManager.get_all_object_types(),
+#         "total_objects": len(HubSpotEventManager.EVENT_TYPES)
+#     }
 
-@app.get("/hubspot/events/{object_type}")
-async def get_hubspot_events_by_object(object_type: str):
-    """
-    Get all events for a specific HubSpot object type
+# @app.get("/hubspot/events/{object_type}")
+# async def get_hubspot_events_by_object(object_type: str):
+#     """
+#     Get all events for a specific HubSpot object type
     
-    Supports: contact, company, deal, ticket, product, line_item, conversation
-    """
-    try:
-        events = HubSpotEventManager.get_events_by_object(object_type)
-        data = HubSpotEventManager.EVENT_TYPES[object_type]
+#     Supports: contact, company, deal, ticket, product, line_item, conversation
+#     """
+#     try:
+#         events = HubSpotEventManager.get_events_by_object(object_type)
+#         data = HubSpotEventManager.EVENT_TYPES[object_type]
         
-        return {
-            "object_type": object_type,
-            "object_name": data["object_name"],
-            "scope_required": data["scope_required"],
-            "description": data["description"],
-            "event_count": len(data["events"]),
-            "events": data["events"]
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+#         return {
+#             "object_type": object_type,
+#             "object_name": data["object_name"],
+#             "scope_required": data["scope_required"],
+#             "description": data["description"],
+#             "event_count": len(data["events"]),
+#             "events": data["events"]
+#         }
+#     except ValueError as e:
+#         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/hubspot/events")
-async def get_all_hubspot_events():
-    """
-    Get all HubSpot webhook events across all object types
+# @app.get("/hubspot/events")
+# async def get_all_hubspot_events():
+#     """
+#     Get all HubSpot webhook events across all object types
     
-    Returns comprehensive list with required scopes
-    """
-    all_events = HubSpotEventManager.get_all_events()
+#     Returns comprehensive list with required scopes
+#     """
+#     all_events = HubSpotEventManager.get_all_events()
     
-    return {
-        "total_events": len(all_events),
-        "note": "Configure these via HubSpot UI: Settings > Integrations > Private Apps > Webhooks",
-        "events": all_events,
-        "excluded_properties": HubSpotEventManager.EXCLUDED_PROPERTIES
-    }
+#     return {
+#         "total_events": len(all_events),
+#         "note": "Configure these via HubSpot UI: Settings > Integrations > Private Apps > Webhooks",
+#         "events": all_events,
+#         "excluded_properties": HubSpotEventManager.EXCLUDED_PROPERTIES
+#     }
 
-@app.post("/zendesk/get-signing-secret")
-async def get_zendesk_signing_secret(
-    subdomain: str,
-    email: EmailStr,
-    api_key: str,
-    webhook_id: str
-):
-    """
-    Get Zendesk webhook signing secret
+# @app.post("/zendesk/get-signing-secret")
+# async def get_zendesk_signing_secret(
+#     subdomain: str,
+#     email: EmailStr,
+#     api_key: str,
+#     webhook_id: str
+# ):
+#     """
+#     Get Zendesk webhook signing secret
     
-    This secret is required for signature verification
-    """
-    url = f"https://{subdomain}.zendesk.com/api/v2/webhooks/{webhook_id}/signing_secret"
-    headers = get_zendesk_headers(subdomain, email, api_key)
+#     This secret is required for signature verification
+#     """
+#     url = f"https://{subdomain}.zendesk.com/api/v2/webhooks/{webhook_id}/signing_secret"
+#     headers = get_zendesk_headers(subdomain, email, api_key)
     
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
+#     try:
+#         response = requests.get(url, headers=headers, timeout=10)
         
-        if response.status_code == 200:
-            data = response.json()
-            secret = data.get("signing_secret", {}).get("secret", "")
+#         if response.status_code == 200:
+#             data = response.json()
+#             secret = data.get("signing_secret", {}).get("secret", "")
             
-            return {
-                "success": True,
-                "webhook_id": webhook_id,
-                "signing_secret": secret,
-                "message": "⚠️ IMPORTANT: Copy this secret and update your code!",
-                "instructions": [
-                    "1. Copy the signing_secret value",
-                    "2. Open your main.py file",
-                    "3. Find line ~1029: signing_secret = 'YOUR_ZENDESK_SIGNING_SECRET'",
-                    f"4. Replace with: signing_secret = '{secret}'",
-                    "5. Restart your FastAPI server"
-                ]
-            }
-        else:
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Failed to get signing secret: {response.text}"
-            )
+#             return {
+#                 "success": True,
+#                 "webhook_id": webhook_id,
+#                 "signing_secret": secret,
+#                 "message": "⚠️ IMPORTANT: Copy this secret and update your code!",
+#                 "instructions": [
+#                     "1. Copy the signing_secret value",
+#                     "2. Open your main.py file",
+#                     "3. Find line ~1029: signing_secret = 'YOUR_ZENDESK_SIGNING_SECRET'",
+#                     f"4. Replace with: signing_secret = '{secret}'",
+#                     "5. Restart your FastAPI server"
+#                 ]
+#             }
+#         else:
+#             raise HTTPException(
+#                 status_code=response.status_code,
+#                 detail=f"Failed to get signing secret: {response.text}"
+#             )
             
-    except requests.exceptions.Timeout:
-        raise HTTPException(status_code=504, detail="Request timeout")
-    except Exception as e:
-        logger.error(f"Failed to get signing secret: {e}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+#     except requests.exceptions.Timeout:
+#         raise HTTPException(status_code=504, detail="Request timeout")
+#     except Exception as e:
+#         logger.error(f"Failed to get signing secret: {e}")
+#         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
-# ============================================================================
-# Unified Webhook Receiver
-# ============================================================================
+# # ============================================================================
+# # Unified Webhook Receiver
+# # ============================================================================
 
 
-@app.api_route(
-    "/{full_path:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
-)
-async def universal_webhook_receiver(
-    request: Request,
-    full_path: str,
-    x_zendesk_webhook_signature: str | None = Header(default=None),
-    x_zendesk_webhook_signature_timestamp: str | None = Header(default=None),
-    x_hubspot_signature_v3: str | None = Header(default=None, alias="X-HubSpot-Signature-v3"),
-    x_hubspot_request_timestamp: str | None = Header(default=None, alias="X-HubSpot-Request-Timestamp"),
-    authorization: str | None = Header(default=None)
-):
-    """
-    🌍 Universal Webhook Receiver
-    - Accepts any webhook (HubSpot, Zendesk, Stripe, GitHub, etc.)
-    - Logs payloads
-    - Verifies signatures
-    """
+# @app.api_route(
+#     "/{full_path:path}",
+#     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
+# )
+# async def universal_webhook_receiver(
+#     request: Request,
+#     full_path: str,
+#     x_zendesk_webhook_signature: str | None = Header(default=None),
+#     x_zendesk_webhook_signature_timestamp: str | None = Header(default=None),
+#     x_hubspot_signature_v3: str | None = Header(default=None, alias="X-HubSpot-Signature-v3"),
+#     x_hubspot_request_timestamp: str | None = Header(default=None, alias="X-HubSpot-Request-Timestamp"),
+#     authorization: str | None = Header(default=None)
+# ):
+#     """
+#     🌍 Universal Webhook Receiver
+#     - Accepts any webhook (HubSpot, Zendesk, Stripe, GitHub, etc.)
+#     - Logs payloads
+#     - Verifies signatures
+#     """
 
-    raw_body = await request.body()
-    ip = request.client.host
-    method = request.method
-    now = datetime.now().strftime("%I:%M:%S %p")
+#     raw_body = await request.body()
+#     ip = request.client.host
+#     method = request.method
+#     now = datetime.now().strftime("%I:%M:%S %p")
 
-    print("\n" + "═" * 80)
-    print(f"📩 WEBHOOK RECEIVED ({method}) at /{full_path}")
-    print(f"🕓 Time: {now}")
-    print(f"🌐 From: {ip}")
-    print("─" * 80)
+#     print("\n" + "═" * 80)
+#     print(f"📩 WEBHOOK RECEIVED ({method}) at /{full_path}")
+#     print(f"🕓 Time: {now}")
+#     print(f"🌐 From: {ip}")
+#     print("─" * 80)
 
-    # Try parsing JSON
-    try:
-        data = json.loads(raw_body)
-        pretty = json.dumps(data, indent=2, ensure_ascii=False)
-        print(pretty)
-    except Exception:
-        pretty = raw_body.decode("utf-8", errors="replace") if raw_body else "Empty body"
-        data = {}
+#     # Try parsing JSON
+#     try:
+#         data = json.loads(raw_body)
+#         pretty = json.dumps(data, indent=2, ensure_ascii=False)
+#         print(pretty)
+#     except Exception:
+#         pretty = raw_body.decode("utf-8", errors="replace") if raw_body else "Empty body"
+#         data = {}
 
-    print("─" * 80)
+#     print("─" * 80)
 
-    # Detect and verify source
-    source = "unknown"
-    signature_status = "not_verified"
-    #Zendesk verification
-    if x_zendesk_webhook_signature and x_zendesk_webhook_signature_timestamp:
-        source = "zendesk"
-        try:
-            secret = "VfqIyAffmA-lcH8bkn3iBlUAQZcRgXeoU6Z-8lgWfpI="
-            base_string = x_zendesk_webhook_signature_timestamp + raw_body.decode()
-            digest = hmac.new(secret.encode(), base_string.encode(), hashlib.sha256).digest()
-            computed_signature = base64.b64encode(digest).decode()
+#     # Detect and verify source
+#     source = "unknown"
+#     signature_status = "not_verified"
+#     #Zendesk verification
+#     if x_zendesk_webhook_signature and x_zendesk_webhook_signature_timestamp:
+#         source = "zendesk"
+#         try:
+#             secret = "VfqIyAffmA-lcH8bkn3iBlUAQZcRgXeoU6Z-8lgWfpI="
+#             base_string = x_zendesk_webhook_signature_timestamp + raw_body.decode()
+#             digest = hmac.new(secret.encode(), base_string.encode(), hashlib.sha256).digest()
+#             computed_signature = base64.b64encode(digest).decode()
 
-            if hmac.compare_digest(computed_signature, x_zendesk_webhook_signature):
-                signature_status = "verified"
-                print("✅ Zendesk signature verified!")
-            else:
-                signature_status = "failed"
-                print("Zendesk signature mismatch!")
-        except Exception as e:
-            signature_status = "error"
-            print(f"⚠️ Zendesk verification error: {e}")
+#             if hmac.compare_digest(computed_signature, x_zendesk_webhook_signature):
+#                 signature_status = "verified"
+#                 print("✅ Zendesk signature verified!")
+#             else:
+#                 signature_status = "failed"
+#                 print("Zendesk signature mismatch!")
+#         except Exception as e:
+#             signature_status = "error"
+#             print(f"⚠️ Zendesk verification error: {e}")
 
-    # ✅ HubSpot signature verification (v3 method)
+#     # ✅ HubSpot signature verification (v3 method)
        
-    elif x_hubspot_signature_v3 and x_hubspot_request_timestamp:
-        source = "hubspot"
-        try:
-            client_secret = "77270ecb-6643-44af-9dd3-e439a3c97df5"
+#     elif x_hubspot_signature_v3 and x_hubspot_request_timestamp:
+#         source = "hubspot"
+#         try:
+#             client_secret = "77270ecb-6643-44af-9dd3-e439a3c97df5"
             
-            print("\n🔍 HUBSPOT V3 SIGNATURE VERIFICATION:")
-            print(f"   Timestamp: {x_hubspot_request_timestamp}")
-            print(f"   Received v3 sig: {x_hubspot_signature_v3}")
+#             print("\n🔍 HUBSPOT V3 SIGNATURE VERIFICATION:")
+#             print(f"   Timestamp: {x_hubspot_request_timestamp}")
+#             print(f"   Received v3 sig: {x_hubspot_signature_v3}")
             
-            # 1. Validate timestamp (reject if older than 5 minutes)
-            try:
-                timestamp_ms = float(x_hubspot_request_timestamp)
-                request_time = datetime.fromtimestamp(timestamp_ms / 1000)
-                current_time = datetime.now()
-                time_diff = (current_time - request_time).total_seconds()
+#             # 1. Validate timestamp (reject if older than 5 minutes)
+#             try:
+#                 timestamp_ms = float(x_hubspot_request_timestamp)
+#                 request_time = datetime.fromtimestamp(timestamp_ms / 1000)
+#                 current_time = datetime.now()
+#                 time_diff = (current_time - request_time).total_seconds()
                 
-                if time_diff > 300:  # 5 minutes
-                    signature_status = "expired"
-                    print(f"   ⏰ Timestamp too old: {time_diff:.1f}s")
-                else:
-                    print(f"   ✅ Timestamp valid: {time_diff:.1f}s ago")
+#                 if time_diff > 300:  # 5 minutes
+#                     signature_status = "expired"
+#                     print(f"   ⏰ Timestamp too old: {time_diff:.1f}s")
+#                 else:
+#                     print(f"   ✅ Timestamp valid: {time_diff:.1f}s ago")
                     
-                    # 2. Get request details
-                    method = request.method  # POST
+#                     # 2. Get request details
+#                     method = request.method  # POST
                     
-                    # Construct full URI
-                    forwarded_proto = request.headers.get("x-forwarded-proto", "https")
-                    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
-                    path = request.url.path
-                    query = f"?{request.url.query}" if request.url.query else ""
-                    full_uri = f"{forwarded_proto}://{forwarded_host}{path}{query}"
+#                     # Construct full URI
+#                     forwarded_proto = request.headers.get("x-forwarded-proto", "https")
+#                     forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+#                     path = request.url.path
+#                     query = f"?{request.url.query}" if request.url.query else ""
+#                     full_uri = f"{forwarded_proto}://{forwarded_host}{path}{query}"
                     
-                    print(f"   Method: {method}")
-                    print(f"   URI: {full_uri}")
+#                     print(f"   Method: {method}")
+#                     print(f"   URI: {full_uri}")
                     
-                    # 3. Get raw body as string
-                    body_str = raw_body.decode('utf-8')
+#                     # 3. Get raw body as string
+#                     body_str = raw_body.decode('utf-8')
                     
-                    # 4. Create source string: METHOD + URI + BODY + TIMESTAMP
-                    # Note: No spaces or delimiters between components
-                    source_string = method + full_uri + body_str + x_hubspot_request_timestamp
+#                     # 4. Create source string: METHOD + URI + BODY + TIMESTAMP
+#                     # Note: No spaces or delimiters between components
+#                     source_string = method + full_uri + body_str + x_hubspot_request_timestamp
                     
-                    print(f"   Source string preview: {source_string[:150]}...")
+#                     print(f"   Source string preview: {source_string[:150]}...")
                     
-                    # 5. Generate HMAC-SHA256 signature
-                    hashed = hmac.new(
-                        client_secret.encode('utf-8'),
-                        msg=source_string.encode('utf-8'),
-                        digestmod=hashlib.sha256
-                    ).digest()
+#                     # 5. Generate HMAC-SHA256 signature
+#                     hashed = hmac.new(
+#                         client_secret.encode('utf-8'),
+#                         msg=source_string.encode('utf-8'),
+#                         digestmod=hashlib.sha256
+#                     ).digest()
                     
-                    # 6. Base64 encode the hash
-                    computed_signature = base64.b64encode(hashed).decode('utf-8')
+#                     # 6. Base64 encode the hash
+#                     computed_signature = base64.b64encode(hashed).decode('utf-8')
                     
-                    print(f"\n   Computed: {computed_signature}")
-                    print(f"   Received: {x_hubspot_signature_v3}")
+#                     print(f"\n   Computed: {computed_signature}")
+#                     print(f"   Received: {x_hubspot_signature_v3}")
                     
-                    # 7. Compare signatures using constant-time comparison
-                    if hmac.compare_digest(computed_signature, x_hubspot_signature_v3):
-                        signature_status = "verified"
-                        print(f"   ✅ V3 SIGNATURE VERIFIED!")
-                    else:
-                        signature_status = "failed"
-                        print(f"  V3 SIGNATURE MISMATCH!")
+#                     # 7. Compare signatures using constant-time comparison
+#                     if hmac.compare_digest(computed_signature, x_hubspot_signature_v3):
+#                         signature_status = "verified"
+#                         print(f"   ✅ V3 SIGNATURE VERIFIED!")
+#                     else:
+#                         signature_status = "failed"
+#                         print(f"  V3 SIGNATURE MISMATCH!")
                         
-            except (ValueError, OverflowError) as e:
-                signature_status = "invalid_timestamp"
-                print(f"  Invalid timestamp format: {e}")
+#             except (ValueError, OverflowError) as e:
+#                 signature_status = "invalid_timestamp"
+#                 print(f"  Invalid timestamp format: {e}")
                 
-        except Exception as e:
-            signature_status = "error"
-            print(f"⚠️ V3 verification error: {e}")
-            import traceback
-            traceback.print_exc()
+#         except Exception as e:
+#             signature_status = "error"
+#             print(f"⚠️ V3 verification error: {e}")
+#             import traceback
+#             traceback.print_exc()
             
-    # Debug: Show all headers (helpful for troubleshooting)
-    print("\n📋 Headers received:")
-    for header, value in request.headers.items():
-        if 'signature' in header.lower() or 'timestamp' in header.lower():
-            print(f"   {header}: {value}")
+#     # Debug: Show all headers (helpful for troubleshooting)
+#     print("\n📋 Headers received:")
+#     for header, value in request.headers.items():
+#         if 'signature' in header.lower() or 'timestamp' in header.lower():
+#             print(f"   {header}: {value}")
     
-    print("═" * 80 + "\n")
+#     print("═" * 80 + "\n")
 
-    return JSONResponse({
-        "status": "RECEIVED",
-        "source": source,
-        "signature_status": signature_status,
-        "path": full_path,
-        "from": ip,
-        "time": now,
-        "message": "Webhook captured successfully!"
-    })
-@app.get("/")
-async def root():
-    return {"status": "Universal Webhook Server is LIVE"}
-@app.post("/webhook/hubspot")
-async def receive_hubspot_webhook(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    x_hubspot_signature_v3: str = Header(..., alias="X-HubSpot-Signature-v3"),
-    x_hubspot_request_timestamp: str = Header(..., alias="X-HubSpot-Request-Timestamp"),
-    idempotency: IdempotencyManager = Depends(get_idempotency_manager),
-    circuit_breaker: CircuitBreaker = Depends(get_circuit_breaker)
-):
-    """
-    Secure HubSpot webhook receiver with v3 signature verification,
-    timestamp validation, idempotency, and async batch processing
-    """
-    start_time = datetime.utcnow()
+#     return JSONResponse({
+#         "status": "RECEIVED",
+#         "source": source,
+#         "signature_status": signature_status,
+#         "path": full_path,
+#         "from": ip,
+#         "time": now,
+#         "message": "Webhook captured successfully!"
+#     })
+# @app.get("/")
+# async def root():
+#     return {"status": "Universal Webhook Server is LIVE"}
+# @app.post("/webhook/hubspot")
+# async def receive_hubspot_webhook(
+#     request: Request,
+#     background_tasks: BackgroundTasks,
+#     x_hubspot_signature_v3: str = Header(..., alias="X-HubSpot-Signature-v3"),
+#     x_hubspot_request_timestamp: str = Header(..., alias="X-HubSpot-Request-Timestamp"),
+#     idempotency: IdempotencyManager = Depends(get_idempotency_manager),
+#     circuit_breaker: CircuitBreaker = Depends(get_circuit_breaker)
+# ):
+#     """
+#     Secure HubSpot webhook receiver with v3 signature verification,
+#     timestamp validation, idempotency, and async batch processing
+#     """
+#     start_time = datetime.utcnow()
     
-    # Check circuit breaker
-    if await circuit_breaker.is_open(PlatformType.HUBSPOT):
-        logger.warning("HubSpot circuit breaker is OPEN - rejecting request")
-        raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+#     # Check circuit breaker
+#     if await circuit_breaker.is_open(PlatformType.HUBSPOT):
+#         logger.warning("HubSpot circuit breaker is OPEN - rejecting request")
+#         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
     
-    try:
-        # Get raw body and URI
-        raw_body = await request.body()
-        body_str = raw_body.decode('utf-8')
+#     try:
+#         # Get raw body and URI
+#         raw_body = await request.body()
+#         body_str = raw_body.decode('utf-8')
         
-        # Construct full URI
-        scheme = request.url.scheme
-        hostname = request.headers.get("host", "localhost")
-        path = request.url.path
-        query = f"?{request.url.query}" if request.url.query else ""
-        full_uri = f"{scheme}://{hostname}{path}{query}"
+#         # Construct full URI
+#         scheme = request.url.scheme
+#         hostname = request.headers.get("host", "localhost")
+#         path = request.url.path
+#         query = f"?{request.url.query}" if request.url.query else ""
+#         full_uri = f"{scheme}://{hostname}{path}{query}"
         
-        # TODO: Replace with your HubSpot app client secret
-        client_secret = "YOUR_HUBSPOT_CLIENT_SECRET"
+#         # TODO: Replace with your HubSpot app client secret
+#         client_secret = "YOUR_HUBSPOT_CLIENT_SECRET"
         
-        # Verify signature
-        is_valid = SignatureVerifier.verify_hubspot_signature_v3(
-            signature=x_hubspot_signature_v3,
-            timestamp=x_hubspot_request_timestamp,
-            method=request.method,
-            uri=full_uri,
-            body=body_str,
-            client_secret=client_secret
-        )
+#         # Verify signature
+#         is_valid = SignatureVerifier.verify_hubspot_signature_v3(
+#             signature=x_hubspot_signature_v3,
+#             timestamp=x_hubspot_request_timestamp,
+#             method=request.method,
+#             uri=full_uri,
+#             body=body_str,
+#             client_secret=client_secret
+#         )
         
-        if not is_valid:
-            logger.warning("HubSpot signature verification failed")
-            await circuit_breaker.record_request(PlatformType.HUBSPOT, success=False)
-            raise HTTPException(status_code=401, detail="Invalid signature or expired timestamp")
+#         if not is_valid:
+#             logger.warning("HubSpot signature verification failed")
+#             await circuit_breaker.record_request(PlatformType.HUBSPOT, success=False)
+#             raise HTTPException(status_code=401, detail="Invalid signature or expired timestamp")
         
-        # Parse events (HubSpot sends array of events)
-        events = json.loads(body_str)
+#         # Parse events (HubSpot sends array of events)
+#         events = json.loads(body_str)
         
-        if not isinstance(events, list):
-            events = [events]
+#         if not isinstance(events, list):
+#             events = [events]
         
-        processed_count = 0
-        duplicate_count = 0
+#         processed_count = 0
+#         duplicate_count = 0
         
-        # Process each event
-        for event in events:
-            event_id = str(event.get('eventId', 'unknown'))
-            subscription_type = event.get('subscriptionType', 'unknown')
-            attempt_number = event.get('attemptNumber', 0)
+#         # Process each event
+#         for event in events:
+#             event_id = str(event.get('eventId', 'unknown'))
+#             subscription_type = event.get('subscriptionType', 'unknown')
+#             attempt_number = event.get('attemptNumber', 0)
             
-            # Track retry attempts
-            attempt_count = await idempotency.get_attempt_count(event_id, PlatformType.HUBSPOT)
-            if attempt_count != attempt_number:
-                logger.warning(f"Attempt number mismatch: stored={attempt_count}, received={attempt_number}")
+#             # Track retry attempts
+#             attempt_count = await idempotency.get_attempt_count(event_id, PlatformType.HUBSPOT)
+#             if attempt_count != attempt_number:
+#                 logger.warning(f"Attempt number mismatch: stored={attempt_count}, received={attempt_number}")
             
-            # Check idempotency
-            if await idempotency.is_processed(event_id, PlatformType.HUBSPOT):
-                duplicate_count += 1
-                continue
+#             # Check idempotency
+#             if await idempotency.is_processed(event_id, PlatformType.HUBSPOT):
+#                 duplicate_count += 1
+#                 continue
             
-            # Mark as processed
-            await idempotency.mark_processed(event_id, PlatformType.HUBSPOT)
-            await idempotency.increment_attempt(event_id, PlatformType.HUBSPOT)
+#             # Mark as processed
+#             await idempotency.mark_processed(event_id, PlatformType.HUBSPOT)
+#             await idempotency.increment_attempt(event_id, PlatformType.HUBSPOT)
             
-            # Add to background processing
-            background_tasks.add_task(EventProcessor.process_hubspot_event, event)
-            processed_count += 1
+#             # Add to background processing
+#             background_tasks.add_task(EventProcessor.process_hubspot_event, event)
+#             processed_count += 1
         
-        # Record success
-        await circuit_breaker.record_request(PlatformType.HUBSPOT, success=True)
+#         # Record success
+#         await circuit_breaker.record_request(PlatformType.HUBSPOT, success=True)
         
-        processing_time = (datetime.utcnow() - start_time).total_seconds()
+#         processing_time = (datetime.utcnow() - start_time).total_seconds()
         
-        logger.info(f"HubSpot webhook batch received: {processed_count} new, {duplicate_count} duplicates - {processing_time:.3f}s")
+#         logger.info(f"HubSpot webhook batch received: {processed_count} new, {duplicate_count} duplicates - {processing_time:.3f}s")
         
-        return JSONResponse({
-            "status": "success",
-            "message": "Events received and queued for processing",
-            "total_events": len(events),
-            "processed_events": processed_count,
-            "duplicate_events": duplicate_count,
-            "processing_time_ms": int(processing_time * 1000)
-        })
+#         return JSONResponse({
+#             "status": "success",
+#             "message": "Events received and queued for processing",
+#             "total_events": len(events),
+#             "processed_events": processed_count,
+#             "duplicate_events": duplicate_count,
+#             "processing_time_ms": int(processing_time * 1000)
+#         })
         
-    except HTTPException:
-        raise
-    except json.JSONDecodeError:
-        await circuit_breaker.record_request(PlatformType.HUBSPOT, success=False)
-        raise HTTPException(status_code=400, detail="Invalid JSON payload")
-    except Exception as e:
-        await circuit_breaker.record_request(PlatformType.HUBSPOT, success=False)
-        logger.error(f"HubSpot webhook processing error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+#     except HTTPException:
+#         raise
+#     except json.JSONDecodeError:
+#         await circuit_breaker.record_request(PlatformType.HUBSPOT, success=False)
+#         raise HTTPException(status_code=400, detail="Invalid JSON payload")
+#     except Exception as e:
+#         await circuit_breaker.record_request(PlatformType.HUBSPOT, success=False)
+#         logger.error(f"HubSpot webhook processing error: {e}", exc_info=True)
+#         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 
